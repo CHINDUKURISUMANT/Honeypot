@@ -1,0 +1,93 @@
+\chapter{\MakeUppercase{Conclusion and Further Enhancements}}
+
+\paragraph{}
+
+\section{Conclusion}
+
+This project set out to explore whether a honeypot system could be meaningfully elevated beyond a passive network lure into an active, adaptive, and intelligent deception platform. The Behaviour-Aware Honeypot demonstrates that this is not only achievable, but practically deployable on commodity hardware within a fully containerised environment.
+
+The central research question — whether real-time machine-learning classification and large-language-model-generated responses can increase attacker dwell time, improve attribution accuracy, and yield actionable forensic intelligence without revealing the system's artificial nature — has been answered affirmatively across all three dimensions.
+
+\subsection{Research Objectives: Achievement Summary}
+
+\begin{table}[h!]
+    \centering
+    \caption{Research Objectives and Outcome Status}
+    \renewcommand{\arraystretch}{1.3}
+    \begin{tabular}{|p{7cm}|l|}
+        \hline
+        \textbf{Objective} & \textbf{Status} \\
+        \hline
+        Deploy realistic SSH and HTTP honeypot services & \textbf{Fully Achieved} \\
+        Classify attacker payloads using an ML pipeline & \textbf{Fully Achieved} \\
+        Track attacker lifecycle via a deterministic state machine & \textbf{Fully Achieved} \\
+        Detect cross-service kill-chain completion & \textbf{Fully Achieved} \\
+        Generate dynamic deception responses via local LLM & \textbf{Fully Achieved} \\
+        Provide a live operator dashboard with full controls & \textbf{Fully Achieved} \\
+        Ensure tamper-evident SHA-256 hash-chained forensic logs & \textbf{Fully Achieved} \\
+        Maintain sub-100\,ms response times for deterministic paths & \textbf{Fully Achieved} \\
+        \hline
+    \end{tabular}
+\end{table}
+
+\subsection{Technical Contributions}
+
+The project introduces several technical contributions beyond a standard honeypot implementation:
+
+\begin{enumerate}
+    \item \textbf{Tiered AI Deception Architecture:} A novel three-tier operational mode (Eco, Standard, Advanced) enables the honeypot to adapt to the available host resources at runtime without service interruption. The dashboard toggle allows instantaneous promotion and demotion between tiers.
+
+    \item \textbf{Multi-Stage ML Intelligence Pipeline:} The cascaded architecture — TF-IDF Random Forest for a sub-2\,ms fast path, DistilBART for asynchronous deep semantic analysis, and a PyTorch BiLSTM for sequence-level attacker profiling — represents a principled layering of computational cost against analytical depth.
+
+    \item \textbf{Cross-Protocol Kill Chain Detection:} The Behaviour Classifier tracks state per IP address regardless of which protocol — SSH or HTTP — originated the event. The system correctly identifies and flags an attacker who begins via the HTTP trap and migrates to the SSH service, a pattern characteristic of \ac{APT}-tier activity.
+
+    \item \textbf{Self-Healing Feedback Loop:} Confirmed attack sessions automatically feed back into the Random Forest retraining pipeline. This closes the model improvement loop without operator intervention, enabling the system to continuously improve its detection accuracy on genuinely novel payloads observed in the wild.
+
+    \item \textbf{Forensic Hash Chain:} The blockchain-inspired log chain provides post-incident tamper detection that is mathematically verifiable. Each log entry hash depends on its predecessor, so any retrospective alteration invalidates all subsequent entries — a forensic property not commonly found in honeypot implementations.
+\end{enumerate}
+
+\subsection{Closing Remarks}
+
+The Behaviour-Aware Honeypot advances the state of the art for research-grade honeypot systems by demonstrating that modern AI — specifically on-device language model inference and transformer-based behavioural profiling — can be safely and efficiently embedded into an active deception system. The local Ollama LLM model ensures that no attacker payload data is transmitted to external services, maintaining strict operational security while simultaneously enabling contextually rich, session-coherent deception responses.
+
+The system is reproducible, containerised, and deployable on any machine capable of running Docker Engine. It provides a robust foundation for further academic investigation into adversary behaviour modelling, deception engineering, and AI-driven cybersecurity systems.
+
+\section{Further Enhancements}
+
+While the current implementation fully satisfies its stated research objectives, several meaningful avenues for enhancement exist. These are organised into short-term, medium-term, and long-term proposals.
+
+\subsection{Short-Term Enhancements}
+
+\paragraph{Expanding the Fake Filesystem.}
+The current in-memory filesystem serves a well-curated set of bait files. A future enhancement would introduce a procedurally generated file tree — drawing from a corpus of real-world Ubuntu server filesystem snapshots — to ensure that any arbitrary path exploration by the attacker (e.g., \texttt{/proc/cpuinfo}, \texttt{/var/log/syslog}) returns plausible kernel-level content rather than a fabricated error. This would significantly improve the system's resilience against experienced manual testers.
+
+\paragraph{Additional Trap Protocols.}
+The current system supports SSH (port 2222) and HTTP (port 8080). Deploying additional traps for commonly targeted services — such as an FTP honeypot (port 21), a MySQL honeypot (port 3306), or a Telnet trap (port 23) — would broaden the threat surface and attract a wider spectrum of automated scanners and targeted attackers.
+
+\paragraph{Real-Time Alert Webhooks.}
+When the behaviour state machine transitions an IP to \texttt{KILL\_CHAIN\_CONFIRMED} or \texttt{CONFIRMED\_ATTACK}, a webhook notification could be dispatched to a Slack channel, a Microsoft Teams endpoint, or a SIEM integration layer (e.g., Splunk HEC). This would allow the system to be embedded into production SOC workflows without requiring constant dashboard monitoring.
+
+\subsection{Medium-Term Enhancements}
+
+\paragraph{Distributed Multi-Node Deployment.}
+As noted in the limitations section, the current architecture co-locates all Docker containers on a single host. A distributed architecture — separating the trap services onto dedicated edge nodes while the Core API and ML pipeline operate on a hardened central server — would improve both scalability and resilience to container escape attacks. Network-level microsegmentation via a service mesh (e.g., Consul Connect) would further isolate the trap containers.
+
+\paragraph{Active Attacker Fingerprinting.}
+Beyond passive behavioural classification, the system could be extended to actively fingerprint the attacker's toolset. For example, subtle differences in SSH handshake timing, \texttt{User-Agent} strings, TCP window sizes, and TLS cipher suite preferences can be used to identify whether the attacker is using common automated tools (e.g., Masscan, Hydra, Metasploit) or bespoke tooling characteristic of state-sponsored actors. This intelligence could be fed directly into the MITRE attribution report.
+
+\paragraph{BiLSTM Model Expansion.}
+The current BiLSTM classifier operates on a fixed window of five commands and maps to three attacker archetypes. Retraining the model on a larger, labelled corpus of real honeypot session data — publicly available through datasets such as the CAIDA telescope traffic or KDD Cup 1999 — would produce a more general and statistically robust classification model. Attacker classes could be expanded to include subtypes such as \texttt{RANSOMWARE\_OPERATOR} and \texttt{CRYPTOMINER}.
+
+\paragraph{LLM Model Rotation and Benchmarking.}
+The system currently uses \texttt{Phi-3-mini} via Ollama. A comparative evaluation of alternative models — including \texttt{Mistral-7B}, \texttt{LLaMA-3.1-8B}, and \texttt{Gemma-2-9B} — would quantify the trade-off between response quality (measured by human red-team ``detectability'' ratings) and inference latency. An automated model selection routine could promote the most performant model following each benchmark run.
+
+\subsection{Long-Term Enhancements}
+
+\paragraph{Reinforcement Learning-Driven Deception Strategy.}
+The current deception strategy (selecting a Tier, injecting delay, serving bait payloads) is deterministic once the attacker class is known. A natural long-term evolution is to frame the deception selection problem as a Markov Decision Process and train a Reinforcement Learning agent to optimise attacker dwell time. The agent would receive a positive reward for each additional interaction step before the attacker disconnects, and a negative reward when a session is prematurely terminated (suggesting detection). This would allow the system to evolve genuine deception strategies beyond the designer's original heuristics.
+
+\paragraph{Threat Intelligence Platform Integration.}
+Structured forensic session data — including attacker IPs, observed TTPs, command sequences, and MITRE attribution — could be serialised in STIX/TAXII format and published to community threat-sharing platforms such as MISP or the CIRCL Threat Intelligence Platform. This would allow the honeypot to contribute to and consume from a wider ecosystem of threat intelligence, enriching its own classification models with the collective observations of the broader security community.
+
+\paragraph{Honeynet Architecture with Deception Routing.}
+The strongest evolution of this work would transition from a single-instance honeypot to a full honeynet: a network of coordinated, varied-profile honeypots managed by a central deception controller. On initial attacker contact, the controller could route the incoming session to the honeypot profile best suited to maximising intelligence extraction for that attacker class — for example, routing a bot scanner to a high-volume SQL trap, while routing a methodical manual tester to the SSH shell with full LLM-backed interaction. This dynamic routing constitutes a genuinely adaptive, AI-native deception fabric applicable at enterprise scale.

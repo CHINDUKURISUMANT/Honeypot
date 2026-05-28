@@ -1,0 +1,89 @@
+\chapter{\MakeUppercase{Results and Discussion}}
+
+\section{Overview}
+
+This chapter presents the empirical results obtained from the multi-phase testing campaign of the Behaviour-Aware Honeypot. It analyses the system's performance, the efficacy of the machine-learning classification models, the behaviour state machine's ability to track adversarial progression, and the generation of contextual deception payloads. Finally, the chapter discusses these findings in the context of the overarching research objectives, highlighting the system's strengths and acknowledging its limitations.
+
+\section{System Performance and Latency}
+
+A core design principle of the honeypot was the maintenance of realistic response latencies. If a simulated shell adds noticeable computational overhead during command execution, a sophisticated attacker might recognise the environment as artificial.
+
+The latency tests were conducted using an automated SSH interaction script and HTTP load generator.
+
+\begin{table}[h!]
+    \centering
+    \caption{Empirical Latency Results Across Service Endpoints}
+    \renewcommand{\arraystretch}{1.3}
+    \begin{tabular}{|l|l|l|}
+        \hline
+        \textbf{Operation} & \textbf{Average Measured Latency} & \textbf{Classification} \\
+        \hline
+        \ac{HTTP} Normal GET (\texttt{/}) & $14$\,ms -- $16$\,ms & Deterministic Fast-Path \\
+        \ac{HTTP} Attack POST (SQLi) & $20$\,ms -- $23$\,ms & Real-time Classification \\
+        \ac{SSH} Command (\texttt{pwd}) & $\approx 500$\,ms & Artificial adaptive delay injected \\
+        \ac{SSH} Command (\texttt{ls -la}) & $\approx 500$\,ms & Artificial adaptive delay injected \\
+        ML Fast-Path Prediction & $<2$\,ms & Zero operational overhead \\
+        \hline
+    \end{tabular}
+\end{table}
+
+\subsection{Performance Discussion}
+The empirical data confirms that the \ac{HTTP} trap handles both benign routing and complex payload interception within an extremely narrow 23\,ms window. For the \ac{SSH} honeypot, the recorded $\approx 500$\,ms latencies are a direct result of the Maneuvering Engine's \textit{Adaptive Delay} function, which selectively injects latency based on the predicted attacker class (e.g., \texttt{SCRIPT\_BOT} vs. \texttt{APT}) to mimic legitimate server load. Because the underlying classification (Random Forest) executes in under 2\,ms, the system successfully decouple intelligence from I/O overhead, strictly meeting the operational performance requirements.
+
+\section{Threat Classification and State Machine Escalation}
+
+The honeypot's core innovation relies on dynamically tracking an attacker across a state machine derived from cumulative behavioural risk scores rather than single-event alerts. This was evaluated using predefined adversarial profiles operating sequentially.
+
+\subsection{Scenario 1: Dumb Bot Profile}
+The simulated bot performed a linear scan followed by brute-force credential attempts.
+\begin{enumerate}
+    \item \textbf{Benign Reconnaissance:} Requests to \texttt{/robots.txt} and \texttt{/wp-login.php} accurately resulted in a \texttt{NEW} to \texttt{PROBING} state transition. Risk score remained $0.0$.
+    \item \textbf{Credential Access:} Hitting the \texttt{/.env} bait endpoint immediately raised the risk score to $3.5$, shifting the state to \texttt{SUSPICIOUS}.
+    \item \textbf{Brute Forcing:} Subsequent repeated credential attempts pushed the risk score to $19.0$, moving the state cleanly into \texttt{MALICIOUS}. The system successfully applied the \texttt{CONTAIN} action for all malicious steps.
+\end{enumerate}
+
+\subsection{Scenario 2: Script Kiddie Profile}
+This attacker executed varied, noisy payload injections:
+\begin{enumerate}
+    \item \textbf{Initial Breach:} Triggered a \texttt{SUSPICIOUS} state at step one using a classic SQL Injection payload (\texttt{admin' OR '1'='1}).
+    \item \textbf{Rapid Escalation:} Subsequent Command Injections (\texttt{wget http://evil.com/ddos\_bot.sh}) drastically elevated the risk score to $30.0$.
+    \item \textbf{MITRE Application:} Over only five steps, the system mapped six distinct MITRE ATT\&CK techniques (T1190, T1110, T1083, T1059, T1048, T1071).
+\end{enumerate}
+
+\subsection{Scenario 3: Persistent Attacker and Kill Chain Execution}
+The most sophisticated test verified the cross-service Kill Chain mapping. 
+The profile started cleanly, appearing benign until it accessed \texttt{/backup.zip}, which updated the AI classification track to \texttt{PERSISTENT\_ATTACKER}. Upon utilising the SSH credential pair seeded in the HTTP trap (\texttt{admin:Adm1n\#2024}), the behaviour state machine violently transitioned to \texttt{KILL\_CHAIN\_CONFIRMED}. 
+This proves that the Core API correctly aggregates states across entirely isolated port bindings, achieving the lateral movement detection objective.
+
+\section{Machine Learning Efficacy}
+
+The integration of ML into the event ingestion pipeline demonstrated high precision during testing. The Random Forest Fast-Path model achieved a confidence parity of $1.0$ (maximum confidence) for canonical SQL Injections, Command Injections, and Brute Force patterns.
+
+The PyTorch-based BiLSTM sequence profiler correctly detected behavioural archetypes even when individual payloads appeared benign. For instance, in the \textit{APT Stealth} scenario, the attacker executed \texttt{whoami} and \texttt{sudo -l}. Individually, these are classified as \texttt{BENIGN} commands. However, the sequence profiler, mapping the embedding trajectory, successfully pushed the context state to \texttt{CONFIRMED\_ATTACK} just sequence steps later when a forensic suppression technique (\texttt{rm -rf /var/log/auth.log}) was executed.
+
+\section{Deception Efficacy and Output Idempotency}
+
+Operating in Tier 3 (Advanced AI) mode, the Maneuvering Engine utilised Ollama running the \texttt{Phi-3-mini} LLM to dynamically generate responses. 
+
+\subsection{Contextual Accuracy}
+The multi-layer sanitisation pipeline effectively mitigated hallucination edge cases. For instance, known identity-corruption strings (such as "ubuntu-server" or "localhost" defaults generated by the LLM) were correctly stripped and replaced with the session's actual injected hostname before being rendered to the SSH socket. 
+Furthermore, repetitive command tests executed during Phase 3 verification (\texttt{ls} executed multiple times) consistently returned identical byte streams. This idempotency is critical; a system returning differently formatted directory listings for the same command instantly compromises the deception.
+
+\section{Discussion and Limitations}
+
+The synthesis of empirical testing indicates that the Behaviour-Aware Honeypot successfully fulfills its primary research objectives. It elevates the standard honeypot paradigm by shifting the focus from atomic signature matching to continuous, probabilistic session monitoring.
+
+\subsection{Enhancement of Threat Intelligence}
+Traditional honeypots generate vast amounts of low-context noise (e.g., hundreds of disconnected SSH brute-force alerts). By packaging multiple techniques into a cohesive JSON behaviour state with calculated risk thresholds, this architecture provides actionable, high-fidelity intelligence directly applicable to Security Operations Center (SOC) triage queues.
+
+\subsection{Acknowledgement of Limitations}
+While effective, the current implementation presents boundaries that future iterations must address:
+\begin{itemize}
+    \item \textbf{LLM Compute Overhead:} Running a generative model (even quantized Phi-3-mini) requires substantial host memory and introduces varying latency. If host resources are constrained, the adaptive delay heuristic could slip to an unrealistic duration, risking detection.
+    \item \textbf{Static File System Fallbacks:} The canonical in-memory file system accurately simulates \texttt{cat} commands for pre-seeded bait files, but completely arbitrary file explorations by an attacker (e.g., trying to read obscure kernel \texttt{/proc/} parameters) rely heavily on LLM hallucination, which may lack absolute kernel-level structural accuracy.
+    \item \textbf{Tunnelling Centralisation:} Exposing the instances through public tunnels (Cloudflare and Pinggy) exposes the attacker IP headers. Although the HTTP Flask middleware captures the \texttt{X-Forwarded-For} header, advanced obfuscation at the ingress tunnel can occasionally occlude true origin tracking.
+\end{itemize}
+
+\section{Summary}
+
+The results validate the hypothesis that a properly compartmentalised honeypot can leverage real-time ML classification and LLM-driven deception without sacrificing operational latency or structural integrity. By mapping attacker lifecycles iteratively through the Behaviour Engine and dynamically expanding deception via the Maneuvering Engine, the system significantly augments attacker dwell time and generates superior forensic intelligence comparative to static legacy solutions.

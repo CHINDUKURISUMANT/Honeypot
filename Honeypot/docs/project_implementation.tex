@@ -1,0 +1,97 @@
+\chapter{\MakeUppercase{Project Implementation}}
+
+\paragraph{}
+
+\section{Overview}
+
+This chapter details the practical implementation of the Behaviour-Aware Honeypot system, bridging the theoretical design and architecture models discussed previously with the actual software engineering practices, libraries, and frameworks employed. The system was developed primarily in Python, prioritising modularity, asynchronous event handling, and containerised deployment.
+
+The implementation is divided into several loosely coupled components: the Core Orchestrator and REST API, the Trap Services (SSH and HTTP), the Machine Learning Classification Pipeline, the Dynamic Deception Engine (Maneuvering Engine), and the interactive Dashboard. Containerisation using Docker and Docker Compose serves as the foundation for process isolation and reproducible deployment.
+
+\section{Containerisation and Orchestration Strategy}
+
+To ensure complete isolation between the vulnerable trap services and the core detection logic, the system is fully containerised. Docker Compose is used to orchestrate five distinct services over a dedicated internal bridge network.
+
+\subsection{Docker Configuration}
+Each service is built using a multi-stage Dockerfile approach to minimise the final image footprint and attack surface. The \texttt{core} and \texttt{dashboard} services transitively depend on standard Debian-based Python images (e.g., \texttt{python:3.10-slim}), while the \ac{SSH} honeypot incorporates custom user configurations to mimic a standard Ubuntu 20.04 LTS environment. 
+
+A central \texttt{.env} file injects runtime configurations into the containers, dictating port bindings, tunnel URLs, and API endpoints. The Core API explicitly mounts the host's Docker socket (\texttt{/var/run/docker.sock}), allowing the Orchestrator module to dynamically monitor, start, and stop the sibling trap containers on demand without requiring external orchestration tools like Kubernetes.
+
+\section{Core API and Orchestrator Implementation}
+
+The Core API acts as the system's central nervous system. It is implemented using the \textbf{Flask} web framework, selected for its lightweight nature and ease of routing.
+
+\subsection{Event Bus and Routing}
+The API exposes RESTful endpoints (e.g., \texttt{POST /api/event}) that trap services use to submit attacker interactions. When an event is received, it follows a strict pipeline:
+\begin{enumerate}
+    \item \textbf{Ingestion:} The JSON payload is parsed and validated.
+    \item \textbf{Classification:} The payload is passed to the ML pipeline for immediate rule-based and machine-learning evaluation.
+    \item \textbf{State Update:} The \texttt{BehaviourClassifier} updates the attacker's per-IP state machine and risk score.
+    \item \textbf{Deception Generation:} The \texttt{ManeuveringEngine} formulates a response payload.
+    \item \textbf{Logging:} The event, alongside its classification and generated response, is dispatched asynchronously to the \texttt{CentralLogger}.
+\end{enumerate}
+
+\subsection{Concurrency and Asynchronous Execution}
+To satisfy the strict sub-100\,ms latency requirement for interactive \ac{SSH} sessions, heavy computational tasks are deferred. The Core API employs Python's \texttt{concurrent.futures.ThreadPoolExecutor} to offload tasks such as DistilBART zero-shot classification, BiLSTM sequence embedding, and background re-training of the Random Forest model. This guarantees that the main Flask thread returns the deception payload to the trap service instantly.
+
+\section{Trap Services Implementation}
+
+The trap services are the externally facing components of the honeypot, designed to securely interact with malicious actors while mimicking genuine vulnerable applications.
+
+\subsection{SSH Honeypot}
+The \ac{SSH} honeypot is implemented using \textbf{Paramiko}, a pure-Python implementation of the \ac{SSH}v2 protocol. Rather than connecting the attacker to a real shell (\texttt{/bin/bash}), the honeypot implements a custom \texttt{ServerInterface} that overrides the authentication and shell-invocation methods.
+
+\begin{itemize}
+    \item \textbf{Authentication Hook:} The engine accepts any username and password combination, logging the credentials and bypassing standard OS PAM authentication.
+    \item \textbf{Fake Filesystem:} A canonical, in-memory dictionary-based filesystem (\texttt{in\_memory\_fs.py}) maintains the directory tree. It tracks the attacker's current working directory (\texttt{cwd}) and responds to deterministic commands like \texttt{cd}, \texttt{pwd}, and \texttt{ls} locally, ensuring extremely low latency.
+    \item \textbf{Command Interception:} Inputs classified as attack vectors are suspended, and a synchronous \ac{HTTP} request is made to the Core API to retrieve the dynamically generated deception response before being flushed to the attacker's terminal stdout.
+\end{itemize}
+
+\subsection{HTTP Honeypot}
+The HTTP trap is a standalone Flask application styled as a fictional corporate entity, ``NovaTech Solutions''. It employs a custom middleware (\texttt{@app.before\_request}) to intercept all incoming requests. 
+
+The application logic explicitly defines vulnerable routes (e.g., \texttt{/login}, \texttt{/.env}, \texttt{/backup}). Standard SQL injection payloads (e.g., \texttt{' OR 1=1 --}) and Path Traversal strings are matched using regular expressions. Upon detection, the trap formats the request headers, payload body, and targeted endpoint into a unified JSON event and submits it to the Core API, before returning a pre-configured HTTP response (such as a fake SQL syntax error).
+
+\section{Machine Learning Pipeline Implementation}
+
+The intelligence of the honeypot is provided by a multi-stage ML pipeline blending traditional lightweight models with deep-learning transformers.
+
+\subsection{Fast-Path Random Forest}
+The primary classifier relies on \textbf{scikit-learn}. Incoming payloads are vectorized using a \texttt{TfidfVectorizer} combined with an n-gram character analyzer (to detect obfuscated shell metacharacters), and subsequently classified by a \texttt{RandomForestClassifier}. The model pipeline is serialized using \texttt{joblib} and loaded into memory on container startup. Its prediction provides a probability distribution over seven attack classes in under 2\,ms.
+
+\subsection{Deep Zero-Shot Classifier}
+For deep semantic analysis, the system utilises the Hugging Face \textbf{transformers} library. The model \texttt{valhalla/distilbart-mnli-12-1} is instantiated within an asynchronous thread. To prevent memory exhaustion within the Docker container, the model operates exclusively on CPU with quantisation heuristics applied. Results are stored in a Python \texttt{lru\_cache} to serve subsequent identical payloads instantly.
+
+\subsection{Behavioural Sequence Profiling}
+Sequence profiling is implemented using \textbf{PyTorch}. A Bidirectional Long Short-Term Memory (BiLSTM) network processes the attacker's command history. Commands are first converted to 768-dimensional sentence embeddings via \texttt{all-DistilRoBERTa-v1}. The PyTorch model (\texttt{nn.LSTM}) processes the fixed-size tensor window (last 5 commands) and passes the final hidden state through a linear classification layer to output the predicted attacker class (e.g., \texttt{SCRIPT\_BOT}, \texttt{APT}).
+
+\section{Dynamic Deception Engine (Maneuvering Engine)}
+
+The \texttt{ManeuveringEngine} (\texttt{maneuvering\_engine.py}) governs the generative deception capabilities of the honeypot. It operates in three Tiered modes, prioritising either raw speed or extreme realism.
+
+\subsection{Local LLM Inference with Ollama}
+For full Tier 3 operation, the engine leverages the \textbf{Ollama} platform to run the \texttt{Phi-3-mini} LLM locally. This ensures no attack data is ever transmitted to external APIs (e.g., OpenAI), maintaining complete operational security and zero operational cost. The engine communicates with Ollama via its local REST API.
+
+\subsection{Contextual Prompt Generation}
+When a complex bash injection is detected, the engine dynamically constructs a system prompt. This prompt injects the attacker's current mutable state — including their manipulated \texttt{cwd}, the exact hostname, the logged-in username, and a truncated list of files available in the current directory. This guarantees that the LLM generates a terminal output deeply tailored to the fake environment, preventing identity drift.
+
+\subsection{Sanitisation Pipeline}
+Raw LLM outputs are notoriously unpredictable. A dedicated normalisation function strips hallucinated markdown fences and prevents the exposure of predefined corruption signals (e.g., text containing ``I am an AI''). Crucially, an output validation layer intercepts and drops responses that spontaneously leak credentials or sensitive keys for non-read commands, replacing them with a safe fallback string.
+
+\section{Dashboard and Telemetry}
+
+The live operator view is implemented in \textbf{Streamlit}, providing a reactive, component-based UI without the overhead of modern Javascript frameworks.
+The dashboard continuously polls the Core API's telemetry endpoints. It renders dynamic metric cards indicating system health, a tabular real-time event feed, and a detailed Inspector view for viewing individual attacker kill-chain progression, calculated risk scores, and the precise MITRE ATT\&CK techniques mapped to their current session.
+
+\section{Forensic Integrity and Logging}
+
+All security events are persisted using a non-blocking JSON logger (\texttt{CentralLogger}). To guarantee forensic integrity against tampering in the event of a container breakout, the implementation constructs a continuous cryptographic hash chain via Python's \texttt{hashlib.sha256}. Every new log entry is concatenated with the hexadecimal hash of the previous log entry before its own hash is computed and written to disk, turning the event log into a rudimentary tamper-evident blockchain.
+
+\section{External Tunnelling Software}
+
+To safely expose the local Docker networks to external real-world attackers, the system utilises reverse tunnels. 
+\begin{itemize}
+    \item \textbf{Cloudflare (TryCloudflare):} Runs in a lightweight, unprivileged container to expose the HTTP honeypot and Dashboard on autogenerated \texttt{.trycloudflare.com} domains.
+    \item \textbf{Pinggy.io:} Exposes the SSH honeypot's TCP port (2222) over the public internet, returning a command-line string that external attackers can use to access the fake shell.
+\end{itemize}
+These endpoints are dynamically parsed by the Orchestrator from container logs and securely broadcast to the Streamlit dashboard on run time.
